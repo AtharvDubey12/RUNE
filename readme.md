@@ -6,5 +6,5 @@ The end to end code execution engine built for **Algorhythm**.
 
 1. Clone the RUNE repository
 ```bash
-git clone AtharvDubey12/RUNE
+git clone https://github.com/AtharvDubey12/RUNE.git
 ```
