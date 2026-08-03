@@ -3,16 +3,14 @@ package main
 import (
 	"log"
 	"github.com/gofiber/fiber/v2"
+	"RUNE/api"
 )
 
 func main() {
-	app := fiber.New() // fiber instance
+	app := fiber.New(fiber.Config{DisableStartupMessage: true,})
 
-    // temp route
-	app.Get("/", func(c *fiber.Ctx) error {
-		return c.SendString("RUNE Execution Engine is running!")
-	})
+	api.SetupRoutes(app)
 
-    log.Println("Starting RUNE server on port 3000...")
+	log.Println("RUNE Execution Engine listening on port 3000...")
 	log.Fatal(app.Listen(":3000"))
 }

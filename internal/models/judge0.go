@@ -15,9 +15,10 @@ type Judge0Request struct {
 	Stdin          string  `json:"stdin"`
 	ExpectedOutput string  `json:"expected_output"`
 	CpuTimeLimit   float64 `json:"cpu_time_limit"`
+	Base64Encoded  *bool   `json:"base64_encoded"` // Pointer to handle defaults
 }
 
-// Judge0Response synchronous JSON payload
+// Judge0Response mimics the synchronous return payload
 type Judge0Response struct {
 	Stdout        *string `json:"stdout"`
 	Stderr        *string `json:"stderr"`
