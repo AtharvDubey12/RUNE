@@ -15,3 +15,7 @@ It is in very early stages of development. The final aim:
 ```bash
 git clone https://github.com/AtharvDubey12/RUNE.git
 ```
+2. Launch RUNE
+```bash
+go run cmd/RUNE/main.go
+```
