@@ -15,6 +15,7 @@ type Judge0Request struct {
 	Stdin          string  `json:"stdin"`
 	ExpectedOutput string  `json:"expected_output"`
 	CpuTimeLimit   float64 `json:"cpu_time_limit"`
+	MemoryLimit    int     `json:"memory_limit"`
 	Base64Encoded  *bool   `json:"base64_encoded"` // Pointer to handle defaults
 }
 
