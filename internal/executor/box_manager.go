@@ -1,8 +1,6 @@
 package executor
 
-/*
-Note: semaphores over box ids.
-*/
+/*Note: semaphores over box ids.*/
 
 // BoxManager manages a pool of available isolate box IDs
 type BoxManager struct {

@@ -1,0 +1,5 @@
+{
+    "RUNE_container_limit":50,
+    "redis_password":"RUNEredis",
+    "postgres_password":"RUNEpost"
+}

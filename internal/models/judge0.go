@@ -17,9 +17,10 @@ type Judge0Request struct {
 	CpuTimeLimit   float64 `json:"cpu_time_limit"`
 	MemoryLimit    int     `json:"memory_limit"`
 	Base64Encoded  *bool   `json:"base64_encoded"` // Pointer to handle defaults
+	CallbackUrl    *string `json:"callback_url"`
 }
 
-// Judge0Response mimics the synchronous return payload
+// Judge0Response synchronous return payload
 type Judge0Response struct {
 	Stdout        *string `json:"stdout"`
 	Stderr        *string `json:"stderr"`
@@ -32,4 +33,18 @@ type Judge0Response struct {
 type Status struct {
 	ID          int    `json:"id"`
 	Description string `json:"description"`
+}
+
+type TestCase struct {
+	Stdin          string `json:"stdin"`
+	ExpectedOutput string `json:"expected_output"`
+}
+
+type SoloBatchRequest struct {
+	SourceCode   string     `json:"source_code"`
+	LanguageID   int        `json:"language_id"`
+	TestCases    []TestCase `json:"testcases"`
+	CpuTimeLimit float64    `json:"cpu_time_limit"`
+	MemoryLimit  int        `json:"memory_limit"`
+	CallbackUrl  *string    `json:"callback_url"`
 }

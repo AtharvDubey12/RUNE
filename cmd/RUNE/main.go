@@ -1,16 +1,59 @@
 package main
 
 import (
+	"database/sql"
 	"log"
+
 	"github.com/gofiber/fiber/v2"
-	"RUNE/api"
+
+	"RUNE/internal/executor"
+	"RUNE/internal/handlers"
+	"RUNE/internal/queue"
+	"RUNE/internal/worker"
+	
+	_ "github.com/lib/pq"
 )
 
 func main() {
-	app := fiber.New(fiber.Config{DisableStartupMessage: true,})
+	// Init Database
+	dbConn, err := sql.Open("postgres", "postgres://postgres:RUNEpost@localhost:5432/runedb?sslmode=disable")
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer dbConn.Close()
 
-	api.SetupRoutes(app)
+	if err := dbConn.Ping(); err != nil {
+		log.Fatalf("Database connection failed: %v", err)
+	}
+	log.Println("[Database] Successfully connected to PostgreSQL!")
 
-	log.Println("RUNE Execution Engine listening on port 3000...")
-	log.Fatal(app.Listen(":3000"))
+	jobQueue := queue.NewEngineQueue(1000) 
+	boxManager := executor.NewBoxManager(50) // The semaphores of 50 boxes
+
+	// Start Background Worker
+	go worker.StartDispatcher(dbConn, jobQueue, boxManager)
+
+	// Inject the shared jobQueue and boxManager into the EngineWrapper
+	engine := &handlers.EngineWrapper{
+		JobQueue:   jobQueue,
+		BoxManager: boxManager,
+	}
+	
+	submissionHandler := handlers.NewSubmissionHandler(dbConn, engine)
+
+	app := fiber.New()
+
+	app.Post("/submissions", func(c *fiber.Ctx) error {  // temporarily placed here, to be shifted to dedicated routes file
+		wait := c.Query("wait")
+		if wait == "true" {
+			return submissionHandler.CreateSyncSubmission(c)
+		}
+		return submissionHandler.CreateAsyncSubmission(c)
+	})
+	app.Get("/submissions/:token", submissionHandler.GetSubmission)
+
+	log.Println("Starting Fiber server on :3000...")
+	if err := app.Listen(":3000"); err != nil {
+		log.Fatalf("Fiber server failed: %v", err)
+	}
 }

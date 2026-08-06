@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"log"
 	"path/filepath"
@@ -8,11 +9,29 @@ import (
 
 	"RUNE/internal/executor"
 	"RUNE/internal/models"
+	"RUNE/internal/queue"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
+	"github.com/lib/pq"
+	
 )
 
-// Initialize the 50-box pool for the handlers package ==> 50 concurrent sandboxes [todo: find optimal number]
-var boxPool = executor.NewBoxManager(50)
+type EngineWrapper struct {
+	JobQueue *queue.EngineQueue
+	BoxManager *executor.BoxManager
+}
+
+type SubmissionHandler struct {
+	DB     *sql.DB
+	Engine *EngineWrapper
+}
+
+func NewSubmissionHandler(db *sql.DB, engine *EngineWrapper) *SubmissionHandler {
+	return &SubmissionHandler{
+		DB:     db,
+		Engine: engine,
+	}
+}
 
 func decodeBase64Str(encoded string) (string, error) {
 	if encoded == "" {
@@ -43,12 +62,7 @@ func compareOutputs(actual, expected string) bool {
 }
 
 // CreateSyncSubmission handles POST /submissions/?wait=true
-func CreateSyncSubmission(c *fiber.Ctx) error {
-	if c.Query("wait") != "true" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "This RUNE route only supports synchronous execution. Ensure ?wait=true is set.",
-		})
-	}
+func (h *SubmissionHandler) CreateSyncSubmission(c *fiber.Ctx) error {
 
 	var req models.Judge0Request
 	if err := c.BodyParser(&req); err != nil {
@@ -57,7 +71,7 @@ func CreateSyncSubmission(c *fiber.Ctx) error {
 		})
 	}
 
-	isBase64 := true
+	isBase64 := false
 	if req.Base64Encoded != nil {
 		isBase64 = *req.Base64Encoded
 	}
@@ -95,8 +109,8 @@ func CreateSyncSubmission(c *fiber.Ctx) error {
 	}
 
 	// Code Execution begins below
-	boxID := boxPool.Acquire()
-	defer boxPool.Release(boxID)
+	boxID := h.Engine.BoxManager.Acquire()
+	defer h.Engine.BoxManager.Release(boxID)
 
 	box := executor.NewSandbox(boxID)
 	if err := box.Init(); err != nil {
@@ -214,11 +228,14 @@ func CreateSyncSubmission(c *fiber.Ctx) error {
 	if isBase64 {
 		encodedStdout := base64.StdEncoding.EncodeToString([]byte(runOutput))
 		runOutput = encodedStdout
+		if runStderr != "" {
+			runStderr = base64.StdEncoding.EncodeToString([]byte(runStderr))
+		}
 	}
 
 	var finalStderr *string
 	if runStderr != "" {
-    	finalStderr = &runStderr
+		finalStderr = &runStderr
 	}
 
 	res := models.Judge0Response{
@@ -231,9 +248,167 @@ func CreateSyncSubmission(c *fiber.Ctx) error {
 
 	// Handle execution errors that aren't mapped via Isolate status 
 	if runErr != nil && status.ID == 3 {
-	    status = models.Status{ID: 13, Description: "Internal Error"}
+		status = models.Status{ID: 13, Description: "Internal Error"}
 		res.Status = status
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(res)
+}
+
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func nilIf0Int(i int) *int {
+	if (i == 0) {
+		return nil
+	}
+	return &i
+}
+func nilIf0Float(i float64) *float64 {
+	if (i == 0) {
+		return nil
+	}
+	return &i
+}
+
+// CreateAsyncSubmission puts data in DB, creates a Job, and queues it
+func (h *SubmissionHandler) CreateAsyncSubmission(c *fiber.Ctx) error {
+	var req models.Judge0Request
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid request payload",
+		})
+	}
+
+	token := uuid.New().String()
+
+	// 1. Insert into DB (status_id = 1 -> "In Queue")
+	_, err := h.DB.Exec(`
+		INSERT INTO submissions 
+		(token, source_code, language_id, stdin, expected_output, cpu_time_limit, memory_limit, callback_url, status_id, status_description)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 'In Queue')
+	`, 
+		token, 
+		req.SourceCode, 
+		req.LanguageID, 
+		nilIfEmpty(req.Stdin), 
+		nilIfEmpty(req.ExpectedOutput), 
+		nilIf0Float(req.CpuTimeLimit), 
+		nilIf0Int(req.MemoryLimit), 
+		req.CallbackUrl, // already a ptr
+	)
+
+	if err != nil {
+		log.Printf("[Engine] Database insert failed for async job: %v\n", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save submission"})
+	}
+
+	job := queue.Job{
+		Token:   token,
+		Request: req,
+	}
+
+	err = h.Engine.JobQueue.Enqueue(job)
+	if err != nil {
+		// Queue is full, revert action.
+		_, _ = h.DB.Exec(`DELETE FROM submissions WHERE token = $1`, token)
+		log.Println("[Engine] WARNING: Job queue at maximum capacity. Submission rejected.")
+		
+		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+			"error": "Execution queue is full. Try again later.",
+		})
+	}
+
+	// Job successfully queued
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"token": token})
+}
+
+// GetSubmission handles single polling: GET /submissions/:token
+func (h *SubmissionHandler) GetSubmission(c *fiber.Ctx) error {
+	token := c.Params("token")
+
+	var statusID int
+	var statusDesc string
+	var compileOutput, stdout, stderr *string
+	var time, memory float64
+
+	query := `
+		SELECT status_id, status_description, compile_output, stdout, stderr, time, memory 
+		FROM submissions 
+		WHERE token = $1
+	`
+	err := h.DB.QueryRow(query, token).Scan(
+		&statusID, &statusDesc, &compileOutput, &stdout, &stderr, &time, &memory,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.Status(404).JSON(fiber.Map{"error": "Submission not found"})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": "Database error", "details": err.Error()})
+	}
+
+	return c.JSON(fiber.Map{
+		"token":          token,
+		"status":         fiber.Map{"id": statusID, "description": statusDesc},
+		"compile_output": compileOutput,
+		"stdout":         stdout,
+		"stderr":         stderr,
+		"time":           time,
+		"memory":         memory,
+	})
+}
+
+// GetBatchSubmissions handles multiple tokens: GET /submissions/batch?tokens=t1,t2
+func (h *SubmissionHandler) GetBatchSubmissions(c *fiber.Ctx) error {
+	tokensStr := c.Query("tokens")
+	if tokensStr == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "tokens query parameter is required"})
+	}
+
+	tokens := strings.Split(tokensStr, ",")
+
+	query := `
+		SELECT token, status_id, status_description, compile_output, stdout, stderr, time, memory 
+		FROM submissions 
+		WHERE token = ANY($1)
+	`
+	
+	rows, err := h.DB.Query(query, pq.Array(tokens))
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Database query failed", "details": err.Error()})
+	}
+	defer rows.Close()
+
+	var results []fiber.Map
+
+	for rows.Next() {
+		var t, statusDesc string
+		var statusID int
+		var compileOutput, stdout, stderr *string
+		var time, memory float64
+
+		if err := rows.Scan(&t, &statusID, &statusDesc, &compileOutput, &stdout, &stderr, &time, &memory); err != nil {
+			continue // Skip corrupted rows
+		}
+
+		results = append(results, fiber.Map{
+			"token":          t,
+			"status":         fiber.Map{"id": statusID, "description": statusDesc},
+			"compile_output": compileOutput,
+			"stdout":         stdout,
+			"stderr":         stderr,
+			"time":           time,
+			"memory":         memory,
+		})
+	}
+
+	// Judge0 batch format returns an object with a "submissions" array
+	return c.JSON(fiber.Map{
+		"submissions": results,
+	})
 }
