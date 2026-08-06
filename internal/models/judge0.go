@@ -48,3 +48,11 @@ type SoloBatchRequest struct {
 	MemoryLimit  int        `json:"memory_limit"`
 	CallbackUrl  *string    `json:"callback_url"`
 }
+
+type BatchRequest struct {
+	Submissions []Judge0Request `json:"submissions"`
+}
+
+type BatchResponseItem struct {
+	Token string `json:"token"`
+}

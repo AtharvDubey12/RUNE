@@ -50,7 +50,9 @@ func main() {
 		}
 		return submissionHandler.CreateAsyncSubmission(c)
 	})
+	app.Get("/submissions/batch", submissionHandler.GetBatchSubmissions)
 	app.Get("/submissions/:token", submissionHandler.GetSubmission)
+	app.Post("/submissions/batch", submissionHandler.CreateBatchSubmission) // ASYNC ONLY ROUTE.
 
 	log.Println("Starting Fiber server on :3000...")
 	if err := app.Listen(":3000"); err != nil {

@@ -327,6 +327,78 @@ func (h *SubmissionHandler) CreateAsyncSubmission(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"token": token})
 }
 
+func (h *SubmissionHandler) CreateBatchSubmission(c *fiber.Ctx) error {
+	var req models.BatchRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid JSON payload"})
+	}
+
+	if len(req.Submissions) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "Submissions array cannot be empty"})
+	}
+
+	var responses []models.BatchResponseItem
+	var jobsToQueue []queue.Job 
+
+	tx, err := h.DB.Begin()
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to start database transaction"})
+	}
+
+	insertQuery := `
+		INSERT INTO submissions 
+		(token, source_code, language_id, stdin, expected_output, cpu_time_limit, memory_limit, callback_url, status_id, status_description)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 'In Queue')
+	`
+	
+	stmt, err := tx.Prepare(insertQuery)
+	if err != nil {
+		tx.Rollback()
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to prepare query"})
+	}
+	defer stmt.Close()
+
+	// insert all into db
+	for _, sub := range req.Submissions {
+		token := uuid.New().String()
+		responses = append(responses, models.BatchResponseItem{Token: token})
+
+		_, err := stmt.Exec(
+			token, 
+			sub.SourceCode, 
+			sub.LanguageID, 
+			nilIfEmpty(sub.Stdin), 
+			nilIfEmpty(sub.ExpectedOutput), 
+			nilIf0Float(sub.CpuTimeLimit), 
+			nilIf0Int(sub.MemoryLimit), 
+			sub.CallbackUrl,
+		)
+		
+		if err != nil {
+			tx.Rollback() // If one fails, abort the whole batch
+			return c.Status(500).JSON(fiber.Map{"error": "Database insert failed", "details": err.Error()})
+		}
+
+		jobsToQueue = append(jobsToQueue, queue.Job{
+			Token:   token,
+			Request: sub,
+		})
+	}
+
+	// Commit txn
+	if err := tx.Commit(); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to commit transaction"})
+	}
+
+	// push them to async worker queue
+	for _, job := range jobsToQueue {
+		h.Engine.JobQueue.Enqueue(job)
+	}
+
+	//  return array of token objects
+	return c.Status(201).JSON(responses)
+}
+
 // GetSubmission handles single polling: GET /submissions/:token
 func (h *SubmissionHandler) GetSubmission(c *fiber.Ctx) error {
 	token := c.Params("token")
