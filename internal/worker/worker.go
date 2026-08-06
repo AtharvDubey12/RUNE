@@ -49,24 +49,45 @@ func compareOutputs(actual, expected string) bool {
 	return true
 }
 
+
+// func RunDedicatedBox(ctx context.Context, dbConn *sql.DB, redisBroker *broker.Broker, boxID int, workerID string) {
+// 	log.Printf("[Worker] Box %d online and listening to global queue...", boxID)
+
+// 	for {
+		
+// 		job, err := redisBroker.PopGlobal(ctx)
+// 		if err != nil {
+// 			if ctx.Err() != nil { return } // Shutdown signal
+// 			continue
+// 		}
+// 		// Claim in PostgreSQL
+// 		if !redisBroker.ClaimJobInDB(dbConn, job.Token, workerID) {
+// 			continue // Another node grabbed it, loop back and BLPOP again
+// 		}
+// 		processJob(dbConn, *job, boxID)
+// 	}
+// }
+
+
 // StartDispatcher continuously pulls jobs from the queue and assigns them to available boxes.
-func StartDispatcher(dbConn *sql.DB, jobQueue *queue.EngineQueue, boxManager *executor.BoxManager) {
+func StartDispatcher(dbConn *sql.DB, jobQueue *queue.EngineQueue, boxManager *executor.BoxManager, nodeCapacity chan struct{}) {
 	log.Println("[Dispatcher] Starting worker dispatcher...")
 	
 	for {
-		// Block until a job is available in the queue
 		job, ok := jobQueue.Dequeue()
 		if !ok {
 			log.Println("[Dispatcher] Failed to dequeue job or queue closed.")
-			continue 
+			return 
 		}
 
-		// Block until a box is available 
 		boxID := boxManager.Acquire()
 
-		// 3. Spawn a goroutine to process the job
 		go func(j queue.Job, id int) {
+			// Release the box back to the BoxManager pool
 			defer boxManager.Release(id)
+			
+			// Refund the capacity ticket back to the Poller
+			defer func() { <-nodeCapacity }()
 			
 			processJob(dbConn, j, id)
 		}(job, boxID)

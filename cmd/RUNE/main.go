@@ -1,3 +1,7 @@
+// this is the script to run in case you're using RUNE Core as a standalone execution system for single machine infra
+// api + execution 
+// also, if you want to use sync routes, RUNE Cluster is incompatible with it, you must use RUNE Core standalone.
+// go run cmd/RUNE/main.go
 package main
 
 import (
@@ -54,7 +58,7 @@ func main() {
 	app.Get("/submissions/:token", submissionHandler.GetSubmission)
 	app.Post("/submissions/batch", submissionHandler.CreateBatchSubmission) // ASYNC ONLY ROUTE.
 
-	log.Println("Starting Fiber server on :3000...")
+	log.Println("Starting RUNE CORE on port 3000...")
 	if err := app.Listen(":3000"); err != nil {
 		log.Fatalf("Fiber server failed: %v", err)
 	}

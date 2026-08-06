@@ -7,17 +7,18 @@ import (
 	"path/filepath"
 	"strings"
 
+	"RUNE/internal/broker"
 	"RUNE/internal/executor"
 	"RUNE/internal/models"
 	"RUNE/internal/queue"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
-	
 )
 
 type EngineWrapper struct {
-	JobQueue *queue.EngineQueue
+	Broker     *broker.Broker
 	BoxManager *executor.BoxManager
 }
 
@@ -275,7 +276,6 @@ func nilIf0Float(i float64) *float64 {
 	return &i
 }
 
-// CreateAsyncSubmission puts data in DB, creates a Job, and queues it
 func (h *SubmissionHandler) CreateAsyncSubmission(c *fiber.Ctx) error {
 	var req models.Judge0Request
 	if err := c.BodyParser(&req); err != nil {
@@ -286,11 +286,11 @@ func (h *SubmissionHandler) CreateAsyncSubmission(c *fiber.Ctx) error {
 
 	token := uuid.New().String()
 
-	// 1. Insert into DB (status_id = 1 -> "In Queue")
+	// Insert into DB (status_id = 0 -> "In Global Queue")
 	_, err := h.DB.Exec(`
 		INSERT INTO submissions 
 		(token, source_code, language_id, stdin, expected_output, cpu_time_limit, memory_limit, callback_url, status_id, status_description)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 'In Queue')
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, 'In Global Queue')
 	`, 
 		token, 
 		req.SourceCode, 
@@ -299,7 +299,7 @@ func (h *SubmissionHandler) CreateAsyncSubmission(c *fiber.Ctx) error {
 		nilIfEmpty(req.ExpectedOutput), 
 		nilIf0Float(req.CpuTimeLimit), 
 		nilIf0Int(req.MemoryLimit), 
-		req.CallbackUrl, // already a ptr
+		req.CallbackUrl,
 	)
 
 	if err != nil {
@@ -312,14 +312,15 @@ func (h *SubmissionHandler) CreateAsyncSubmission(c *fiber.Ctx) error {
 		Request: req,
 	}
 
-	err = h.Engine.JobQueue.Enqueue(job)
+	// Push to global redis queue
+	err = h.Engine.Broker.EnqueueGlobal(c.Context(), job)
 	if err != nil {
-		// Queue is full, revert action.
+		// Enqueue failed, rollback DB insert
 		_, _ = h.DB.Exec(`DELETE FROM submissions WHERE token = $1`, token)
-		log.Println("[Engine] WARNING: Job queue at maximum capacity. Submission rejected.")
+		log.Printf("[Engine] ERROR: Global queue push failed: %v\n", err)
 		
-		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
-			"error": "Execution queue is full. Try again later.",
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Execution broker is unavailable. Try again later.",
 		})
 	}
 
@@ -327,6 +328,7 @@ func (h *SubmissionHandler) CreateAsyncSubmission(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"token": token})
 }
 
+// CreateBatchSubmission handles async array submissions
 func (h *SubmissionHandler) CreateBatchSubmission(c *fiber.Ctx) error {
 	var req models.BatchRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -358,7 +360,6 @@ func (h *SubmissionHandler) CreateBatchSubmission(c *fiber.Ctx) error {
 	}
 	defer stmt.Close()
 
-	// insert all into db
 	for _, sub := range req.Submissions {
 		token := uuid.New().String()
 		responses = append(responses, models.BatchResponseItem{Token: token})
@@ -375,7 +376,7 @@ func (h *SubmissionHandler) CreateBatchSubmission(c *fiber.Ctx) error {
 		)
 		
 		if err != nil {
-			tx.Rollback() // If one fails, abort the whole batch
+			tx.Rollback()
 			return c.Status(500).JSON(fiber.Map{"error": "Database insert failed", "details": err.Error()})
 		}
 
@@ -385,21 +386,145 @@ func (h *SubmissionHandler) CreateBatchSubmission(c *fiber.Ctx) error {
 		})
 	}
 
-	// Commit txn
 	if err := tx.Commit(); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to commit transaction"})
 	}
 
-	// push them to async worker queue
+	// 3. Push batch to Global Redis Queue
 	for _, job := range jobsToQueue {
-		h.Engine.JobQueue.Enqueue(job)
+		if err := h.Engine.Broker.EnqueueGlobal(c.Context(), job); err != nil {
+			log.Printf("[Engine Error] Failed to push token %s to Redis: %v", job.Token, err)
+		}
 	}
 
-	//  return array of token objects
 	return c.Status(201).JSON(responses)
 }
 
-// GetSubmission handles single polling: GET /submissions/:token
+// // CreateAsyncSubmission puts data in DB, creates a Job, and queues it
+// func (h *SubmissionHandler) CreateAsyncSubmission(c *fiber.Ctx) error {
+// 	var req models.Judge0Request
+// 	if err := c.BodyParser(&req); err != nil {
+// 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+// 			"error": "Invalid request payload",
+// 		})
+// 	}
+
+// 	token := uuid.New().String()
+
+// 	// 1. Insert into DB (status_id = 1 -> "In Queue")
+// 	_, err := h.DB.Exec(`
+// 		INSERT INTO submissions 
+// 		(token, source_code, language_id, stdin, expected_output, cpu_time_limit, memory_limit, callback_url, status_id, status_description)
+// 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 'In Queue')
+// 	`, 
+// 		token, 
+// 		req.SourceCode, 
+// 		req.LanguageID, 
+// 		nilIfEmpty(req.Stdin), 
+// 		nilIfEmpty(req.ExpectedOutput), 
+// 		nilIf0Float(req.CpuTimeLimit), 
+// 		nilIf0Int(req.MemoryLimit), 
+// 		req.CallbackUrl, // already a ptr
+// 	)
+
+// 	if err != nil {
+// 		log.Printf("[Engine] Database insert failed for async job: %v\n", err)
+// 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to save submission"})
+// 	}
+
+// 	job := queue.Job{
+// 		Token:   token,
+// 		Request: req,
+// 	}
+
+// 	err = h.Engine.JobQueue.Enqueue(job)
+// 	if err != nil {
+// 		// Queue is full, revert action.
+// 		_, _ = h.DB.Exec(`DELETE FROM submissions WHERE token = $1`, token)
+// 		log.Println("[Engine] WARNING: Job queue at maximum capacity. Submission rejected.")
+		
+// 		return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+// 			"error": "Execution queue is full. Try again later.",
+// 		})
+// 	}
+
+// 	// Job successfully queued
+// 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"token": token})
+// }
+
+// func (h *SubmissionHandler) CreateBatchSubmission(c *fiber.Ctx) error {
+// 	var req models.BatchRequest
+// 	if err := c.BodyParser(&req); err != nil {
+// 		return c.Status(400).JSON(fiber.Map{"error": "Invalid JSON payload"})
+// 	}
+
+// 	if len(req.Submissions) == 0 {
+// 		return c.Status(400).JSON(fiber.Map{"error": "Submissions array cannot be empty"})
+// 	}
+
+// 	var responses []models.BatchResponseItem
+// 	var jobsToQueue []queue.Job 
+
+// 	tx, err := h.DB.Begin()
+// 	if err != nil {
+// 		return c.Status(500).JSON(fiber.Map{"error": "Failed to start database transaction"})
+// 	}
+
+// 	insertQuery := `
+// 		INSERT INTO submissions 
+// 		(token, source_code, language_id, stdin, expected_output, cpu_time_limit, memory_limit, callback_url, status_id, status_description)
+// 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 'In Queue')
+// 	`
+	
+// 	stmt, err := tx.Prepare(insertQuery)
+// 	if err != nil {
+// 		tx.Rollback()
+// 		return c.Status(500).JSON(fiber.Map{"error": "Failed to prepare query"})
+// 	}
+// 	defer stmt.Close()
+
+// 	// insert all into db
+// 	for _, sub := range req.Submissions {
+// 		token := uuid.New().String()
+// 		responses = append(responses, models.BatchResponseItem{Token: token})
+
+// 		_, err := stmt.Exec(
+// 			token, 
+// 			sub.SourceCode, 
+// 			sub.LanguageID, 
+// 			nilIfEmpty(sub.Stdin), 
+// 			nilIfEmpty(sub.ExpectedOutput), 
+// 			nilIf0Float(sub.CpuTimeLimit), 
+// 			nilIf0Int(sub.MemoryLimit), 
+// 			sub.CallbackUrl,
+// 		)
+		
+// 		if err != nil {
+// 			tx.Rollback() // If one fails, abort the whole batch
+// 			return c.Status(500).JSON(fiber.Map{"error": "Database insert failed", "details": err.Error()})
+// 		}
+
+// 		jobsToQueue = append(jobsToQueue, queue.Job{
+// 			Token:   token,
+// 			Request: sub,
+// 		})
+// 	}
+
+// 	// Commit txn
+// 	if err := tx.Commit(); err != nil {
+// 		return c.Status(500).JSON(fiber.Map{"error": "Failed to commit transaction"})
+// 	}
+
+// 	// push them to async worker queue
+// 	for _, job := range jobsToQueue {
+// 		h.Engine.JobQueue.Enqueue(job)
+// 	}
+
+// 	//  return array of token objects
+// 	return c.Status(201).JSON(responses)
+// }
+
+// // GetSubmission handles single polling: GET /submissions/:token
 func (h *SubmissionHandler) GetSubmission(c *fiber.Ctx) error {
 	token := c.Params("token")
 

@@ -5,14 +5,11 @@ import (
 	"RUNE/internal/models"
 )
 
-// Job represents the payload moving through the async pipeline.
 type Job struct {
 	Token   string
 	Request models.Judge0Request
 }
 
-// EngineQueue provides an abstract, thread-safe in-memory queue.
-// The underlying channel is unexported to prevent direct access or mutations.
 type EngineQueue struct {
 	jobs chan Job
 }
@@ -23,7 +20,7 @@ var (
 )
 
 // NewEngineQueue initializes a new queue with the specified capacity.
-// For the RUNE architecture, 10000 is the target capacity.
+// For the RUNE architecture, 1000 is the target capacity.
 func NewEngineQueue(capacity int) *EngineQueue {
 	return &EngineQueue{
 		jobs: make(chan Job, capacity),
@@ -33,7 +30,6 @@ func NewEngineQueue(capacity int) *EngineQueue {
 // Enqueue attempts to push a job into the queue.
 // It uses a non-blocking select statement to enable load-shedding if the queue is full.
 func (q *EngineQueue) Enqueue(job Job) error {
-	// Prevent panics if someone tries to enqueue after graceful shutdown begins
 	if q.jobs == nil {
 		return ErrQueueClosed
 	}
@@ -46,9 +42,18 @@ func (q *EngineQueue) Enqueue(job Job) error {
 	}
 }
 
+func (q *EngineQueue) EnqueueBlocking(job Job) error {
+	if q.jobs == nil {
+		return ErrQueueClosed
+	}
+	// Blocks here until StartDispatcher calls Dequeue()
+	q.jobs <- job
+	return nil
+}
+
 // Dequeue blocks until a job is available in the queue.
 // It returns the Job and a boolean indicating if the queue is still open.
-// A false boolean indicates the queue was closed and drained (useful for graceful shutdown).
+// A false boolean indicates the queue was closed and drained.
 func (q *EngineQueue) Dequeue() (Job, bool) {
 	job, ok := <-q.jobs
 	return job, ok
