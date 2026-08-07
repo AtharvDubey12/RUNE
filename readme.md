@@ -1,100 +1,157 @@
 # RUNE - Runtime for Untrusted Native Execution
 
-The end-to-end code execution engine built for **Algorhythm**.
+The end-to-end, high-performance code execution engine built for **Algorhythm**.
 
-It is in very early stages of development. The final aim:
+RUNE is designed as a modern, fast, and lightweight drop-in replacement for Judge0, specifically optimized for algorithmic competitive programming platforms and sandbox evaluation.
 
-* A modern and fast drop-in replacement for judge0 specifically for Algorhythm, with support for: C++, Java, JavaScript and Python3 only. 
-* Have synchronous submission pipeline
-* Have asynchronous queue and worker + webhook based pipeline
-* Support Batch submissions for both sync and async pipelines
+---
 
+## Key Features
 
-## Installation
+* **Supported Languages:** C++ (GCC/G++), Java (OpenJDK 21), JavaScript (Node.js), and Python 3.
+* **Dual Execution Pipeline:** Synchronous execution (`wait=true`) for instant feedback and asynchronous queue/worker with webhook notifications (`wait=false`) for horizontal scaling.
+* **Solo Batch Submissions:** Compile source code once and execute it across multiple `stdin` test cases concurrently.
+* **Isolate Sandboxing:** Hardware and Linux kernel-level cgroup isolation for safe untrusted code execution.
 
-1. Clone the **RUNE** repository on a clean machine
+---
+
+## System Requirements
+
+* **Operating System:** Linux with modern kernel support (works on latest Ubuntu LTS 26.04).
+* **Permissions:** **`sudo` / Root privileges are strictly required** for Isolate to construct cgroups, configure UID/GID mappings, and bind-mount filesystem directories.
+* **Core Runtimes:** `gcc`, `g++`, `openjdk-21-jdk`, `python3`, `nodejs`.
+
+---
+
+## Installation & Setup
+
+### 1. Clone the Repository
 ```bash
 git clone https://github.com/AtharvDubey12/RUNE.git
-```
-2. Open main directory
-```bash
 cd RUNE
 ```
-3. Run the initialization script
+
+### 2. Run the Initialization Script
+Execute the main setup script on a fresh Linux machine. This script installs required compilers (explicitly binding `openjdk-21-jdk`), builds `isolate`, and interactively generates your `.env` configuration.
+
 ```bash
-./init.sh
+chmod +x setup.sh
+sudo ./setup.sh
 ```
-4. Launch **RUNE**
+
+### 3. Sandbox Configuration & Fixes (`fix-isolate.sh`)
+If running on WSL2 or encountering sandbox mount/cgroup initialization issues, execute the isolate fix script to configure subuids/subgids and cgroup root paths:
+
 ```bash
-go run cmd/RUNE/main.go
+chmod +x fix-isolate.sh
+sudo ./fix-isolate.sh
 ```
-Your **RUNE** instance is now running on socket address: http://localhost:3000/
 
->Note that you only need to run `init.sh` before running RUNE for the very first time.
-## Customizations
+### 4. Launch RUNE
 
-1. RUNE Containers limit
+> **Crucial:** RUNE **must** be executed with `sudo`. Running without `sudo` will prevent Isolate from managing cgroups, resulting in `Sandbox initialization failed` or permission errors.
 
-By default, RUNE containers are capped at a maximum of **50** in ```config.json```. This means that at any instance of time, there could be at max **50** independent code executions running on a machine. If the requests are more than the available containers, then it waits until a container is free. You will have to decide this amount according to the system resources of your machine on which **RUNE** is running.
+* **Standalone Core (Single Node Monolith):**
+  ```bash
+  sudo go run cmd/RUNE/main.go
+  ```
 
-2. Redis Password
+* **API Layer (Cluster Setup):**
+  ```bash
+  sudo go run cmd/api/main.go
+  ```
 
-By default, Redis password is set as **RUNEredis** in ```config.json```. It is recommended that you change this to something else before deploying somewhere.
+* **Core Worker Layer (Cluster Setup):**
+  ```bash
+  sudo go run cmd/core/main.go
+  ```
 
-3. PostgreSQL Password
+*(To run in the background, append `&`, e.g., `sudo go run cmd/RUNE/main.go &`)*
 
-By default, PostgreSQL password is set as **RUNEpost** in ```config.json```. It is recommended that you change this to something else before deploying somewhere.
+---
 
-## API Flags
+## Customizations & Configuration (`.env`)
 
-Below are two *optional* flags that can be appended to all APIs.
+1. **`BOX_COUNT` / Container Limits:**  
+   Defines the maximum concurrent Isolate sandboxes (concurrent code executions) active at any single moment. Map this according to your available vCPUs/CPU cores.
+1. **`POLLER_CAPACITY` / Max Submissions in a Core at any instance of time:**  
+   Defines the maximum number of incomplete jobs (submission) a Core can contain within its system at any time.
+3. **Database, Redis and PORT:**  
+   Default credentials in `.env` (redis connection string, db connection string, port number) should be updated prior to production deployment.
 
-1. ```wait``` flag
+---
 
-```wait=true``` means a synchronous submission, ```wait=false``` or absense of flag indicates asynchronous submission.
-> Note that for low traffic demos use ```wait=true``` as sync pipeline is faster than async counterpart. On the otherhand, this approach doesn't scale well when your platform has a large number of concurrent users as you can only have a limited number of RUNE Containers running at an instance time and increasing their amount too much would overwhelm the system resources.
+## API Reference
 
-2. ```base64_encoded``` flag
+### Optional Query Flags
 
-```base64_encoded=true``` means HTTP ```POST``` payload has every body field encoded in ```base64```. Similarly, ```base64_encoded=false``` or absense of flag indicates payload fields are to be taken as is.
->Note that is recommended to use ```base64_encoded=true``` to ensure special characters in code doesn't cause any issues.
+| Flag | Type | Description |
+| :--- | :--- | :--- |
+| `wait` | `boolean` | `true`: Synchronous mode (holds connection until execution finishes).<br>`false` (default): Asynchronous mode (returns queue tokens immediately). |
+| `base64_encoded` | `boolean` | `true`: Payload body fields (`source_code`, `stdin`, `expected_output`) are base64-encoded.<br>`false` (default): Payload fields are parsed as raw strings. |
+
+---
 
 ## API Endpoints
 
-1. Single Submission ```POST``` ```/submissions```
+### 1. Single Submission `POST /submissions`
 
-Hit this route to make a single submission. 
+Submits a single source code execution request.
 
-An Example payload without ```stdin``` and ```base64``` encoding:
+* **Request Payload Example (`wait=true`, raw string):**
+```bash
+curl -X POST "http://localhost:3000/submissions?wait=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_code": "#include <iostream>\nusing namespace std;\nint main(){cout<<\"hello\";return 0;}",
+    "language_id": 54
+  }'
+```
+
+* **Response Example (`200 OK`):**
 ```json
 {
-   "source_code" : "print('Hello, World!')",
-   "language_id" : 71, // Python's language ID is 71
-    "base64_encoded": false
+  "stdout": "hello",
+  "stderr": null,
+  "compile_output": null,
+  "time": 0.003,
+  "memory": 3880,
+  "status": {
+    "id": 3,
+    "description": "Accepted"
+  }
 }
 ```
 
-2. Solo Batch Submission `POST` `/submissions/solobatch`
+### 2. Solo Batch Submission `POST /submissions/solobatch`
 
-This functionality isn't available in `Judge0` where you could send one code and multiple testcases. Traditionally each code is compiled and tested against its corresponding testcase. This route however solves this issue where there is one code that is to be judged across multiple tests.
+Evaluates a single source code submission against multiple `stdin` test cases in parallel without redundant recompilations.
 
-An example payload to
-
+* **Request Payload Example (`wait=false`):**
 ```json
 {
-    "source_code": "int a = int(input())\nprint(a+1)",
-    "language_id": 71,
-    "stdin": ["5", "4", "3"],
-    "base64_encoded": false,
-    "callback_url": "https://mycoolserver.com/cb?id=18"
-}
-```
-the output when `wait=false`
-```json
-{
-    "tokens" : [un725hdb2, h1us81hd91, idh826f29hw7]
+  "source_code": "int a = int(input())\nprint(a+1)",
+  "language_id": 71,
+  "stdin": ["5", "4", "3"],
+  "base64_encoded": false,
+  "callback_url": "[https://mycoolserver.com/cb?id=18](https://mycoolserver.com/cb?id=18)"
 }
 ```
 
-> Note that the route would work fine with `wait=true` but the `HTTP` request run the risk of being timed out before all tests could finish. Thus, it is recommended to use it only with `wait=false` (asynchronously). 
+* **Response Example:**
+```json
+{
+  "tokens": ["un725hdb2", "h1us81hd91", "idh826f29hw7"]
+}
+```
 
+---
+
+## Language ID Reference
+
+| Language | `language_id` |
+| :--- | :--- |
+| **C++ (GCC)** | `54` |
+| **Java (OpenJDK 21)** | `62` |
+| **JavaScript (Node.js)** | `63` |
+| **Python 3** | `71` |
