@@ -9,6 +9,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	_ "github.com/lib/pq"
+	"github.com/joho/godotenv"
 
 	"RUNE/internal/executor"
 	"RUNE/internal/handlers"
@@ -16,9 +17,31 @@ import (
 	"RUNE/internal/worker"
 )
 
+func getEnvAsInt(key string, fallback int) int {
+	if value, exists := os.LookupEnv(key); exists {
+		if parsed, err := strconv.Atoi(value); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func getEnv(key string, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return fallback
+}
+
 func main() {
+
+	// 0. Env load
+	if err := godotenv.Load(); err != nil {
+		log.Println("[Warning] No .env file found. Falling back to system environment variables.")
+	}
+
 	// 1. Init Database
-	dsn := "postgres://postgres:RUNEpost@localhost:5432/runedb?sslmode=disable"
+	dsn := getEnv("POSTGRES_DSN", "postgres://postgres:RUNEpost@localhost:5432/runedb?sslmode=disable")
 	dbConn, err := sql.Open("postgres", dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -31,8 +54,9 @@ func main() {
 	log.Println("[Database] Successfully connected to PostgreSQL!")
 
 	// 2. Setup Local Infrastructure (No Redis)
-	jobQueue := queue.NewEngineQueue(1000) 
-	boxManager := executor.NewBoxManager(50) 
+	jobQueue := queue.NewEngineQueue(getEnvAsInt("LOCAL_QUEUE_CAPACITY", 1000)) 
+	boxManager := executor.NewBoxManager(getEnvAsInt("BOX_COUNT", 4)) 
+	// Note to self: match the isolate count to number of vCPU or threads.
 
 	// 3. Start Local Dispatcher (pass nil for nodeCapacity since there's no Poller)
 	go worker.StartDispatcher(dbConn, jobQueue, boxManager, nil)

@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 
 	"RUNE/internal/broker"
 	"RUNE/internal/db"
@@ -31,26 +32,47 @@ func getOrGenerateWorkerID() string {
 	return newID
 }
 
+func getEnvAsInt(key string, fallback int) int {
+	if value, exists := os.LookupEnv(key); exists {
+		if parsed, err := strconv.Atoi(value); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func getEnv(key string, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return fallback
+}
+
 func main() {
-	dsn := "postgres://postgres:RUNEpost@localhost:5432/runedb?sslmode=disable"
+
+	if err := godotenv.Load(); err != nil {
+		log.Println("[Warning] No .env file found. Falling back to system environment variables.")
+	}
+
+	dsn := getEnv("POSTGRES_DSN", "postgres://postgres:RUNEpost@localhost:5432/runedb?sslmode=disable")
 	dbConn, err := db.Connect(dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 	defer dbConn.Close()
 
-	redisBroker, err := broker.NewBroker("redis://localhost:6379/0")
+	redisBroker, err := broker.NewBroker(getEnv("REDIS_ADDR", "redis://localhost:6379/0"))
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis broker: %v", err)
 	}
 
 	workerID := getOrGenerateWorkerID()
 	
-	jobQueue := queue.NewEngineQueue(1000)
-	boxManager := executor.NewBoxManager(50)
+	jobQueue := queue.NewEngineQueue(getEnvAsInt("LOCAL_QUEUE_CAPACITY", 1000))
+	boxManager := executor.NewBoxManager(getEnvAsInt("BOX_COUNT", 4))
 
 	//  1:1 Node Capacity Semaphore (first is for poller and second is for boxes)
-	nodeCapacity := make(chan struct{}, 50)
+	nodeCapacity := make(chan struct{}, getEnvAsInt("POLLER_CAPACITY", 12))
 
 	go worker.StartDispatcher(dbConn, jobQueue, boxManager, nodeCapacity)
 

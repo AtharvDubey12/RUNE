@@ -7,15 +7,38 @@ import (
 	"syscall"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/joho/godotenv"
+
 
 	"RUNE/internal/broker"
 	"RUNE/internal/db"
 	"RUNE/internal/handlers"
 )
 
+func getEnvAsInt(key string, fallback int) int {
+	if value, exists := os.LookupEnv(key); exists {
+		if parsed, err := strconv.Atoi(value); err == nil {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func getEnv(key string, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return fallback
+}
+
 func main() {
+
+    if err := godotenv.Load(); err != nil {
+		log.Println("[Warning] No .env file found. Falling back to system environment variables.")
+	}
+
 	// Init Database
-	dsn := "postgres://postgres:RUNEpost@localhost:5432/runedb?sslmode=disable"
+	dsn := getEnv("POSTGRES_DSN", "postgres://postgres:RUNEpost@localhost:5432/runedb?sslmode=disable")
 	dbConn, err := db.Connect(dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
@@ -23,7 +46,7 @@ func main() {
 	defer dbConn.Close()
 
 	// Init Redis Broker
-	redisBroker, err := broker.NewBroker("redis://localhost:6379/0")
+	redisBroker, err := broker.NewBroker(getEnv("REDIS_ADDR", "redis://localhost:6379/0"))
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis broker: %v", err)
 	}

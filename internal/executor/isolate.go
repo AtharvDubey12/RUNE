@@ -67,7 +67,6 @@ func (s *Sandbox) CompileCPP(sourceFile, outputFile string) (string, error) {
 		fmt.Sprintf("--box-id=%d", s.BoxID),
 		"--env=PATH=/usr/bin:/bin",
 		"--processes",    // BUG FIX ==>> Allow g++ to fork child processes like cc1plus, as, ld
-		"--mem=256000",   // allot compiler 256MB of RAM
 		"--wall-time=10", // max to 10 seconds to compile
 		"--run",
 		"--",
@@ -170,7 +169,7 @@ func (s *Sandbox) executeBinary(target string, timeLimit float64, memoryLimit fl
 		fmt.Sprintf("--box-id=%d", s.BoxID),
 		"--cg",
 		fmt.Sprintf("--time=%f", timeLimit),
-		fmt.Sprintf("--wall-time=%f", timeLimit+1.0),
+		fmt.Sprintf("--wall-time=%f", timeLimit+10.0),
 		fmt.Sprintf("--cg-mem=%d", int(memoryLimit+65536.0)),
 		fmt.Sprintf("--meta=%s", metaPath),
 		fmt.Sprintf("--processes=%d", maxProcessLim),
