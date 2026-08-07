@@ -45,6 +45,7 @@ install_isolate() {
     #apt-get install -y git libcap-dev pkg-config make
 
     if [ ! -d "/usr/local/bin/isolate" ] && [ ! -f "/usr/local/bin/isolate" ]; then
+        ORIG_DIR=$(pwd)
         cd /tmp
         rm -rf isolate
         git clone https://github.com/ioi/isolate.git
@@ -52,7 +53,7 @@ install_isolate() {
         make isolate
         make install
         echo "[*] Isolate installed successfully."
-        cd - > /dev/null
+        cd "$ORIG_DIR"
     else
         echo "[*] Isolate is already installed."
     fi
@@ -105,6 +106,10 @@ generate_env() {
         fi
     fi
 
+    if [ ! -z "$SUDO_USER" ]; then
+        chown $SUDO_USER:$SUDO_USER .env
+    fi
+
     echo "[*] Configuration successfully saved to .env file!"
     echo ""
 }
@@ -138,8 +143,8 @@ setup_db() {
     echo "[*] Creating User, Database, and Tables..."
     
     # Create user and database
-    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';"
-    sudo -u postgres psql -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+    sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';"
+    sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" 2>/dev/null || sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';"
     
     # Inject Schema
     sudo -u postgres psql -d $DB_NAME -c "
