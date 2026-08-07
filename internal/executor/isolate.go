@@ -113,7 +113,7 @@ func (s *Sandbox) CompileJava(sourceFile string) (string, error) {
 		"--dir=/etc/java-21-openjdk",
         "--dir=/usr/lib/jvm",
 		"--processes",
-		"--cg-mem=512000",
+		//"--cg-mem=512000",
 		"--wall-time=10",
 		"--run",
 		"--",
