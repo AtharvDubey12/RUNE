@@ -35,7 +35,7 @@ install_go() {
 install_compilers() {
     echo "[*] Installing Compilers and Interpreters (C++, Java, Python, Node.js)..."
     apt-get update
-    apt-get install -y build-essential default-jdk python3 nodejs
+    apt-get install -y build-essential openjdk-21-jdk python3 nodejs
 }
 
 install_isolate() {
