@@ -20,6 +20,7 @@ import (
 type EngineWrapper struct {
 	Broker     *broker.Broker
 	BoxManager *executor.BoxManager
+	JobQueue   *queue.EngineQueue // Added for Standalone mode
 }
 
 type SubmissionHandler struct {
@@ -311,9 +312,15 @@ func (h *SubmissionHandler) CreateAsyncSubmission(c *fiber.Ctx) error {
 		Token:   token,
 		Request: req,
 	}
-
-	// Push to global redis queue
-	err = h.Engine.Broker.EnqueueGlobal(c.Context(), job)
+	if h.Engine.Broker != nil {
+		// Push to global redis queue
+		err = h.Engine.Broker.EnqueueGlobal(c.Context(), job) // cluster mode
+	} else if h.Engine.JobQueue != nil {
+		err = h.Engine.JobQueue.Enqueue(job) // standalone ver
+	} else {
+		_, _ = h.DB.Exec(`DELETE FROM submissions WHERE token = $1`, token)
+		return c.Status(500).JSON(fiber.Map{"error": "No execution engine configured"})
+	}
 	if err != nil {
 		// Enqueue failed, rollback DB insert
 		_, _ = h.DB.Exec(`DELETE FROM submissions WHERE token = $1`, token)
@@ -390,10 +397,18 @@ func (h *SubmissionHandler) CreateBatchSubmission(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to commit transaction"})
 	}
 
+	if h.Engine.Broker != nil {
 	// 3. Push batch to Global Redis Queue
-	for _, job := range jobsToQueue {
-		if err := h.Engine.Broker.EnqueueGlobal(c.Context(), job); err != nil {
-			log.Printf("[Engine Error] Failed to push token %s to Redis: %v", job.Token, err)
+		for _, job := range jobsToQueue {
+			if err := h.Engine.Broker.EnqueueGlobal(c.Context(), job); err != nil {
+				log.Printf("[Engine Error] Failed to push token %s to Redis: %v", job.Token, err)
+			}
+		}
+	} else if h.Engine.JobQueue != nil {
+		for _, job := range jobsToQueue {
+			if err := h.Engine.JobQueue.Enqueue(job); err != nil {
+				log.Printf("[Engine Error] Failed to push token %s to local queue: %v", job.Token, err)
+			}
 		}
 	}
 

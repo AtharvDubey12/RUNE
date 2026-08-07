@@ -1,26 +1,25 @@
-// this is the script to run in case you're using RUNE Core as a standalone execution system for single machine infra
-// api + execution 
-// also, if you want to use sync routes, RUNE Cluster is incompatible with it, you must use RUNE Core standalone.
-// go run cmd/RUNE/main.go
 package main
 
 import (
 	"database/sql"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/gofiber/fiber/v2"
+	_ "github.com/lib/pq"
 
 	"RUNE/internal/executor"
 	"RUNE/internal/handlers"
 	"RUNE/internal/queue"
 	"RUNE/internal/worker"
-	
-	_ "github.com/lib/pq"
 )
 
 func main() {
-	// Init Database
-	dbConn, err := sql.Open("postgres", "postgres://postgres:RUNEpost@localhost:5432/runedb?sslmode=disable")
+	// 1. Init Database
+	dsn := "postgres://postgres:RUNEpost@localhost:5432/runedb?sslmode=disable"
+	dbConn, err := sql.Open("postgres", dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
@@ -31,13 +30,14 @@ func main() {
 	}
 	log.Println("[Database] Successfully connected to PostgreSQL!")
 
+	// 2. Setup Local Infrastructure (No Redis)
 	jobQueue := queue.NewEngineQueue(1000) 
-	boxManager := executor.NewBoxManager(50) // The semaphores of 50 boxes
+	boxManager := executor.NewBoxManager(50) 
 
-	// Start Background Worker
-	go worker.StartDispatcher(dbConn, jobQueue, boxManager)
+	// 3. Start Local Dispatcher (pass nil for nodeCapacity since there's no Poller)
+	go worker.StartDispatcher(dbConn, jobQueue, boxManager, nil)
 
-	// Inject the shared jobQueue and boxManager into the EngineWrapper
+	// 4. Inject Local JobQueue and BoxManager into EngineWrapper
 	engine := &handlers.EngineWrapper{
 		JobQueue:   jobQueue,
 		BoxManager: boxManager,
@@ -47,7 +47,7 @@ func main() {
 
 	app := fiber.New()
 
-	app.Post("/submissions", func(c *fiber.Ctx) error {  // temporarily placed here, to be shifted to dedicated routes file
+	app.Post("/submissions", func(c *fiber.Ctx) error {
 		wait := c.Query("wait")
 		if wait == "true" {
 			return submissionHandler.CreateSyncSubmission(c)
@@ -56,10 +56,20 @@ func main() {
 	})
 	app.Get("/submissions/batch", submissionHandler.GetBatchSubmissions)
 	app.Get("/submissions/:token", submissionHandler.GetSubmission)
-	app.Post("/submissions/batch", submissionHandler.CreateBatchSubmission) // ASYNC ONLY ROUTE.
+	app.Post("/submissions/batch", submissionHandler.CreateBatchSubmission)
 
-	log.Println("Starting RUNE CORE on port 3000...")
-	if err := app.Listen(":3000"); err != nil {
-		log.Fatalf("Fiber server failed: %v", err)
-	}
+	// 5. Start Server
+	go func() {
+		log.Println("Starting RUNE Standalone Monolith on port 3000...")
+		if err := app.Listen(":3000"); err != nil {
+			log.Fatalf("Fiber server failed: %v", err)
+		}
+	}()
+
+	// 6. Graceful Shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down RUNE Standalone...")
 }

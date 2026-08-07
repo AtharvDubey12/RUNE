@@ -86,8 +86,10 @@ func StartDispatcher(dbConn *sql.DB, jobQueue *queue.EngineQueue, boxManager *ex
 			// Release the box back to the BoxManager pool
 			defer boxManager.Release(id)
 			
-			// Refund the capacity ticket back to the Poller
-			defer func() { <-nodeCapacity }()
+			if nodeCapacity != nil { // for standalone non redis version
+				// Refund the capacity ticket back to the Poller
+				defer func() { <-nodeCapacity }()
+			}
 			
 			processJob(dbConn, j, id)
 		}(job, boxID)
