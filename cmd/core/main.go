@@ -136,7 +136,7 @@ func recoverOrphanedJobs(dbConn *sql.DB, workerID string, localQueue *queue.Engi
 	rows.Close()
 
 	count := 0
-	for _, job := range pendingRecovery {	// MAX ORPHANED JOBS = MAX NUMBER OF BOXES POSSIBLE --> NO WAITING
+	for _, job := range pendingRecovery {	// MAX ORPHANED JOBS = POLLER CAPACITY
 		// Acquire a ticket before pushing to the internal queue.
 		nodeCapacity <- struct{}{}
 		_ = localQueue.Enqueue(job)
