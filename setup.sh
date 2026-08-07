@@ -41,7 +41,8 @@ install_compilers() {
 install_isolate() {
     echo "[*] Installing Isolate..."
     apt-get update
-    apt-get install -y git libcap-dev pkg-config make
+    apt-get install -y git libcap-dev pkg-config make libseccomp-dev libsystemd-dev
+    #apt-get install -y git libcap-dev pkg-config make
 
     if [ ! -d "/usr/local/bin/isolate" ] && [ ! -f "/usr/local/bin/isolate" ]; then
         cd /tmp
