@@ -301,7 +301,7 @@ func finalizeJob(dbConn *sql.DB, token string, req models.Judge0Request, resp mo
 	if req.CallbackUrl != nil && *req.CallbackUrl != "" {
 		// Fire webhook in a detached goroutine
 		go func(url string, payload models.Judge0Response) {
-			agent := fiber.Post(url)
+			agent := fiber.Put(url)
 			payloadWithToken := map[string]interface{}{
 				"token":              token,
 				"status":             payload.Status,
