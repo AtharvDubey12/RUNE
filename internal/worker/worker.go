@@ -185,11 +185,16 @@ func processJob(dbConn *sql.DB, job queue.Job, boxID int) {
 	}
 
 	if compErr != nil {
-		finalizeJob(dbConn, token, req, models.Judge0Response{
-			Status:        models.Status{ID: 6, Description: "Compilation Error"},
-			CompileOutput: &compileOutput,
-		})
-		return
+    	finalCompileOutput := compileOutput
+    	if isBase64 {
+        	finalCompileOutput = base64.StdEncoding.EncodeToString([]byte(compileOutput))
+    	}
+
+    	finalizeJob(dbConn, token, req, models.Judge0Response{
+        	Status:        models.Status{ID: 6, Description: "Compilation Error"},
+        	CompileOutput: &finalCompileOutput,
+    	})
+    	return
 	}
 
 	// Config Limits
