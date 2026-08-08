@@ -309,7 +309,7 @@ setup_core() {
     echo "==========================================================="
     echo "RUNE Core Setup Complete"
     echo "To run the RUNE Worker Node, execute:"
-    echo "go run cmd/core/main.go"
+    echo "sudo go run cmd/core/main.go"
     echo "==========================================================="
 }
 
@@ -318,20 +318,21 @@ setup_monolith() {
     install_go
     install_compilers
     install_isolate
+    setup_db
     
     # local DB for the monolith, so we prompt if they want to install it locally
-    echo "Do you want to install and configure a local PostgreSQL database now [required for async]? (y/n)"
-    read -p "Choice: " INSTALL_LOCAL_DB
-    if [[ "$INSTALL_LOCAL_DB" == "y" ]]; then
-        setup_db
-    fi
+    # echo "Do you want to install and configure a local PostgreSQL database now [required for async]? (y/n)"
+    # read -p "Choice: " INSTALL_LOCAL_DB
+    # if [[ "$INSTALL_LOCAL_DB" == "y" ]]; then
+    #    setup_db
+    # fi
     
     generate_env "monolith"
     
     echo "==========================================================="
     echo "Monolith Setup Complete"
     echo "To run RUNE as a standalone system, execute:"
-    echo "go run cmd/RUNE/main.go"
+    echo "sudo go run cmd/RUNE/main.go"
     echo "==========================================================="
 }
 
