@@ -123,18 +123,20 @@ curl -X POST "http://localhost:3000/submissions?wait=true" \
 }
 ```
 
-### 2. Solo Batch Submission `POST /submissions/solobatch`
+### 2. Batch Submission `POST /submissions/batch`
 
-Evaluates a single source code submission against multiple `stdin` test cases in parallel without redundant recompilations.
+Evaluates multiple code submission against corresponding `stdin` test cases. It is recommended to use this route to save network round trip times. This route is `async` only.
 
 * **Request Payload Example (`wait=false`):**
 ```json
 {
-  "source_code": "int a = int(input())\nprint(a+1)",
-  "language_id": 71,
-  "stdin": ["5", "4", "3"],
-  "base64_encoded": false,
-  "callback_url": "[https://mycoolserver.com/cb?id=18](https://mycoolserver.com/cb?id=18)"
+  "submissions": [ {
+    "source_code": "#include <iostream>\nusing namespace std;\nint main(){cout<<\"hello\";return 0;}",
+    "language_id": 54
+  }, {
+    "source_code": "#include <iostream>\nusing namespace std;\nint main(){cout<<\"world\";return 0;}",
+    "language_id": 54
+  } ] 
 }
 ```
 
