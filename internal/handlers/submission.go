@@ -152,10 +152,13 @@ func (h *SubmissionHandler) CreateSyncSubmission(c *fiber.Ctx) error {
 	}
 
 	if compErr != nil {
-		// Compilation Error Status Code in Judge0 is 6
+    	finalCompileOutput := compileOutput
+    	if isBase64 {
+    		finalCompileOutput = base64.StdEncoding.EncodeToString([]byte(compileOutput))
+		}
 		return c.Status(fiber.StatusCreated).JSON(models.Judge0Response{
 			Status:        models.Status{ID: 6, Description: "Compilation Error"},
-			CompileOutput: &compileOutput,
+			CompileOutput: &finalCompileOutput,
 		})
 	}
 
